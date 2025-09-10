@@ -1,0 +1,36 @@
+# BTD Thermal JSON到COMSOL MPH转换器依赖包
+
+# 核心依赖
+numpy>=1.21.0
+scipy>=1.7.0
+
+# COMSOL接口
+mph>=1.2.0
+
+# 日志系统
+loguru>=0.7.0
+
+# 数据处理和验证
+pydantic>=2.0.0
+typing-extensions>=4.0.0
+
+# 几何计算
+shapely>=2.0.0
+
+# 测试框架
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+
+# 代码质量
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
+
+# 开发工具
+pre-commit>=3.0.0
+
+# 可选依赖（用于高级功能）
+# matplotlib>=3.5.0  # 用于可视化（可选）
+# pandas>=1.5.0      # 用于数据处理（可选）
+

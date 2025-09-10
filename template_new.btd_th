@@ -1,0 +1,433 @@
+{
+    "templates": [],
+    "materials": [
+        {
+            "name": "Chopper",
+            "type": "thermal",
+            "t_kx_ky_kz_rho_hc_em_ref_properties": [
+                [
+                    2.700000e+01, //temperature
+                    400.0, // 热导率x
+                    400.0, // 热导率y
+                    400.0, // 热导率z
+                    8.0, //密度
+                    385.0, //比热容
+                    0.000000e+00, //电迁移率
+                    0.000000e+00 //太阳反射
+                ]
+            ]
+        },
+        {
+            "name": "FR4",
+            "type": "thermal",
+            "t_kx_ky_kz_rho_hc_em_ref_properties": [
+                [
+                    2.700000e+01,
+                    0.3,
+                    0.3,
+                    0.3,
+                    2.0,
+                    1200.0,
+                    0.000000e+00,
+                    0.000000e+00
+                ]
+            ]
+        },
+        {
+            "name": "Fill",
+            "type": "thermal",
+            "t_kx_ky_kz_rho_hc_em_ref_properties": [
+                [
+                    2.700000e+01,
+                    84.0,
+                    84.0,
+                    84.0,
+                    3.0,
+                    1.0,
+                    0.000000e+00,
+                    0.000000e+00
+                ]
+            ]
+        },
+        {
+            "name": "Si",
+            "type": "thermal",
+            "t_kx_ky_kz_rho_hc_em_ref_properties": [
+                [
+                    2.700000e+01,
+                    130.0,
+                    130.0,
+                    130.0,
+                    2.0,
+                    700.0,
+                    0.000000e+00,
+                    0.000000e+00
+                ]
+            ]
+        },
+        {
+            "name": "silver",
+            "type": "thermal",
+            "t_kx_ky_kz_rho_hc_em_ref_properties": [
+                [
+                    1.270000e+02,
+                    4.250000e+02,
+                    4.250000e+02,
+                    4.250000e+02,
+                    1.050000e+04,
+                    2.390000e+02,
+                    2.000000e-02,
+                    0.000000e+00
+                ],
+                [
+                    1.270000e+02,
+                    4.250000e+02,
+                    4.250000e+02,
+                    4.250000e+02,
+                    1.050000e+04,
+                    2.390000e+02,
+                    2.000000e-02,
+                    0.000000e+00
+                ]
+            ]
+        }
+    ],
+    "sections": [ //substrate详细描述
+        {
+            "name": "substrate",
+            "layer": "substrate",
+            "type": "substrate",
+            "shape": "cube([0,0,0],1000000,1000000,1000000)",
+            "materials": [
+                {
+                    "name": "FR4",
+                    "percent": 1.0
+                }
+            ],
+            "children": [
+                {
+                    "shape": "cube([400000,400000,0],10000,10000,1000000)",
+                    "materials": [
+                        {
+                            "name": "Chopper",
+                            "percent": 1.0
+                        }
+                    ]
+                },
+                {
+                    "shape": "cube([600000,600000,0],10000,10000,1000000)",
+                    "materials": [
+                        {
+                            "name": "Chopper",
+                            "percent": 1.0
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+
+    "parts":[
+        {
+            "name": "interposer",
+            "power_type": 2, //功率类型 1整体功率 2powermap文件
+            "type":"pkg-die",
+            "powermap_file": "", //文件路径s
+            "use_gds": false,
+            "gds_file": "", //gds文件路径
+            "shape": "cube([300000,300000,1e+06],400000,400000,200000)", //die的形状，偏移量
+            "stack_tier": 1, //堆叠层级
+            "temp_file": "" //输出温度文件路径
+            "dies":[       //stacked die堆叠信息
+                {
+                    "name": "",
+                    "type": "die",
+                    "power_type": 2,
+                    "powermap_file": "",
+                    "use_gds": false,
+                    "gds_file": "",
+                    "shape": "cube([300000,300000,1e+06],400000,400000,200000)",
+                    "stack_tier": 2,
+                    "temp_file": "",
+                    "bump": {
+                        "type": "bump",
+                        "lower_die": "", //与die连接的下面的die的名称
+                        "bump_type": 3, //bump形状
+                        "shape": "cube([300000,300000,1e+06],400000,400000,200000)", //bump 区域的大小、偏移量，应该与die的shape相等
+                        "materials": {}, //bump填充区域的材料
+                        "bump_file": "", //bump阵列的描述文件
+                        "array": { //bump阵列的描述
+                            "num_x": 1,
+                            "num_y": 2,
+                            "offset_x": 1,
+                            "offset_y": 1,
+                            "length": 1,
+                            "width": 1,
+                            "material": "Copper"
+                        }
+                    }
+                }
+            ]
+        }
+    ],
+    "parameters": {
+        "air_heat_flux": 30.0,
+        "top_heat_flux": 30.0,
+        "side_heat_flux": 30.0,
+        "bottom_heat_flux": 30.0,
+        "ambient_temperature": 293.15,
+        "unit": ""
+    },
+    "thermal": {
+        "package": {
+            "use_package": true,
+            "has_molding_compound": true,
+            "molding_compound_material": "Chopper",
+            "molding_compound_length": 13e6,
+            "molding_compound_width": 13e6,
+            "molding_compound_thickness": 20200000.0,
+            "has_cavity": true,
+            "cavity_material": "FR4",
+            "cavity_length": 2.0e6,
+            "cavity_width": 2.0e6,
+            "tim_length": 12e6,
+            "tim_width": 12e6,
+            "tim_thickness": 1.0e6,
+            "die_attach_thickness": 1.0e6,
+            "die_attach_material": "FR4",
+            "has_cap": true,
+            "cap_material": "Chopper",
+            "cap_length": 15e6,
+            "cap_width": 15e6,
+            "cap_thickness": 2.5e6,
+            "cap_adhesive_thickness": 1.5e6,
+            "cap_brim_height": 1e6,
+            "cap_brim_length": 1e6,
+            "cap_brim_width": 1e6
+        },
+        "heatsink": {
+            "useHeatSink": true,
+            "baseWidth": 0.55,
+            "baseLength": 0.375,
+            "baseHeight": 1.0,
+            "yFins": 2,
+            "xFins": 2,
+            "finWidth": 0.1,
+            "finLength": 1.0,
+            "finHeight": 0.1,
+            "edgeOffsetX": 0.1,
+            "edgeOffsetY": 0.1,
+            "material": "FR4",
+            "attachLayer": "package"
+        },
+        "testboard": [    //集成section
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-70000],76200000,114300000,70000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.4
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 0.6
+                    }
+                ],
+                "children": []
+            },
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-1.6e+06],76200000,114300000,1530000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.0
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 1.0
+                    }
+                ],
+                "children": []
+            },
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-70000],76200000,114300000,70000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.4
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 0.6
+                    }
+                ],
+                "children": []
+            },
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-533000],76200000,114300000,463000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.02
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 0.98
+                    }
+                ],
+                "children": []
+            },
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-568000],76200000,114300000,35000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.9500000000000001
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 0.04999999999999993
+                    }
+                ],
+                "children": []
+            },
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-1.031e+06],76200000,114300000,463000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.02
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 0.98
+                    }
+                ],
+                "children": []
+            },
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-1.066e+06],76200000,114300000,35000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.9500000000000001
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 0.04999999999999993
+                    }
+                ],
+                "children": []
+            },
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-1.529e+06],76200000,114300000,463000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.02
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 0.98
+                    }
+                ],
+                "children": []
+            },
+            {
+                "name": "",
+                "layer": "",
+                "type": "",
+                "shape": "cube([-2.08e+07,-3.985e+07,-1.564e+06],76200000,114300000,35000)",
+                "offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "thickness": 0,
+                "materials": [
+                    {
+                        "name": "Chopper",
+                        "percent": 0.4
+                    },
+                    {
+                        "name": "FR4",
+                        "percent": 0.6
+                    }
+                ],
+                "children": []
+            }
+        ]
+    }
+}
