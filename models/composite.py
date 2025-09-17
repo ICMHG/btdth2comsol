@@ -13,25 +13,26 @@ class CompositeMaterial:
     """复合材料类"""
     
     def __init__(self):
-        self.materials: List[Tuple[MaterialInfo, float]] = []  # [(material, percentage), ...]
+        self.materials: List[Tuple[str, float]] = []  # [(material_name, percentage), ...]
         self.name = "Composite"
     
-    def add_material(self, material: MaterialInfo, percentage: float) -> None:
+    def add_material(self, material_name: str, percentage: float) -> None:
         """
         添加材料及其体积分数
         
         Args:
-            material: 材料对象
+            material_name: 材料名称
             percentage: 体积分数 (0.0-1.0)
         """
-        self.materials.append((material, percentage))
-        logger.debug(f"Added material {material.name} with percentage {percentage}")
+        self.materials.append((material_name, percentage))
+        logger.debug(f"Added material {material_name} with percentage {percentage}")
     
-    def get_effective_conductivity(self, temperature: float = 293.15) -> 'Conductivity':
+    def get_effective_conductivity(self, materials_mgr, temperature: float = 293.15) -> 'Conductivity':
         """
         计算有效热导率（体积加权平均）
         
         Args:
+            materials_mgr: 材料管理器
             temperature: 温度 (K)
             
         Returns:
@@ -52,20 +53,25 @@ class CompositeMaterial:
         effective_y = 0.0
         effective_z = 0.0
         
-        for material, percentage in self.materials:
-            conductivity = material.get_conductivity(temperature)
-            effective_x += conductivity.x * percentage
-            effective_y += conductivity.y * percentage
-            effective_z += conductivity.z * percentage
+        for material_name, percentage in self.materials:
+            material = materials_mgr.get_material(material_name)
+            if material:
+                conductivity = material.get_conductivity(temperature)
+                effective_x += conductivity.x * percentage
+                effective_y += conductivity.y * percentage
+                effective_z += conductivity.z * percentage
+            else:
+                logger.warning(f"Material {material_name} not found in materials manager")
         
         from models.material import Conductivity
         return Conductivity(effective_x, effective_y, effective_z)
     
-    def get_effective_density(self, temperature: float = 293.15) -> float:
+    def get_effective_density(self, materials_mgr, temperature: float = 293.15) -> float:
         """
         计算有效密度（体积加权平均）
         
         Args:
+            materials_mgr: 材料管理器
             temperature: 温度 (K)
             
         Returns:
@@ -75,17 +81,22 @@ class CompositeMaterial:
             return 0.0
         
         effective_density = 0.0
-        for material, percentage in self.materials:
-            density = material.get_density(temperature)
-            effective_density += density * percentage
+        for material_name, percentage in self.materials:
+            material = materials_mgr.get_material(material_name)
+            if material:
+                density = material.get_density(temperature)
+                effective_density += density * percentage
+            else:
+                logger.warning(f"Material {material_name} not found in materials manager")
         
         return effective_density
     
-    def get_effective_heat_capacity(self, temperature: float = 293.15) -> float:
+    def get_effective_heat_capacity(self, materials_mgr, temperature: float = 293.15) -> float:
         """
         计算有效比热容（体积加权平均）
         
         Args:
+            materials_mgr: 材料管理器
             temperature: 温度 (K)
             
         Returns:
@@ -95,9 +106,13 @@ class CompositeMaterial:
             return 0.0
         
         effective_heat_capacity = 0.0
-        for material, percentage in self.materials:
-            heat_capacity = material.get_heat_capacity(temperature)
-            effective_heat_capacity += heat_capacity * percentage
+        for material_name, percentage in self.materials:
+            material = materials_mgr.get_material(material_name)
+            if material:
+                heat_capacity = material.get_heat_capacity(temperature)
+                effective_heat_capacity += heat_capacity * percentage
+            else:
+                logger.warning(f"Material {material_name} not found in materials manager")
         
         return effective_heat_capacity
     
@@ -119,13 +134,13 @@ class CompositeMaterial:
             return False
         
         # 验证每个材料
-        for material, percentage in self.materials:
-            if not material.validate():
-                logger.error(f"Component material {material.name} validation failed")
+        for material_name, percentage in self.materials:
+            if not material_name or not isinstance(material_name, str):
+                logger.error(f"Invalid material name: {material_name}")
                 return False
             
             if percentage <= 0 or percentage > 1:
-                logger.error(f"Invalid percentage {percentage} for material {material.name}")
+                logger.error(f"Invalid percentage {percentage} for material {material_name}")
                 return False
         
         logger.debug(f"Composite material {self.name} validation passed")
@@ -142,10 +157,10 @@ class CompositeMaterial:
             "name": self.name,
             "materials": [
                 {
-                    "material": material.name,
+                    "material": material_name,
                     "percentage": percentage
                 }
-                for material, percentage in self.materials
+                for material_name, percentage in self.materials
             ]
         }
     
@@ -169,11 +184,8 @@ class CompositeMaterial:
             material_name = mat_data["material"]
             percentage = mat_data["percentage"]
             
-            material = materials_mgr.get_material(material_name)
-            if material:
-                composite.add_material(material, percentage)
-            else:
-                logger.warning(f"Material {material_name} not found in materials manager")
+            # 只存储材料名称和比例，不验证材料是否存在
+            composite.add_material(material_name, percentage)
         
         return composite
 

@@ -346,7 +346,7 @@ class MaterialInfo:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'MaterialInfo':
         """
-        从字典格式创建材料信息对象
+        从字典格式创建材料信息对象，支持BTD格式
         
         Args:
             data: 字典格式的数据
@@ -359,11 +359,39 @@ class MaterialInfo:
             material_type=data.get("type", "thermal")
         )
         
-        # 加载温度点数据
-        temperature_points_data = data.get("temperature_points", [])
-        for point_data in temperature_points_data:
-            point = TemperaturePoint.from_dict(point_data)
-            material.temperature_map[point.temperature] = point
+        # 检查是否是BTD格式的数据
+        if "t_kx_ky_kz_rho_hc_em_ref_properties" in data:
+            # BTD格式：处理温度依赖性属性
+            properties_data = data["t_kx_ky_kz_rho_hc_em_ref_properties"]
+            if isinstance(properties_data, list):
+                for prop_data in properties_data:
+                    if isinstance(prop_data, list) and len(prop_data) >= 7:
+                        # 格式: [temperature, kx, ky, kz, density, heat_capacity, electrical_migration, solar_reflectance]
+                        temperature = float(prop_data[0])
+                        kx = float(prop_data[1])
+                        ky = float(prop_data[2])
+                        kz = float(prop_data[3])
+                        density = float(prop_data[4])
+                        heat_capacity = float(prop_data[5])
+                        electrical_migration = float(prop_data[6]) if len(prop_data) > 6 else 0.0
+                        solar_reflectance = float(prop_data[7]) if len(prop_data) > 7 else 0.0
+                        
+                        material.add_temperature_point(
+                            temperature=temperature,
+                            conductivity_x=kx,
+                            conductivity_y=ky,
+                            conductivity_z=kz,
+                            density=density,
+                            heat_capacity=heat_capacity,
+                            electrical_migration=electrical_migration,
+                            solar_reflectance=solar_reflectance
+                        )
+        else:
+            # 标准格式：加载温度点数据
+            temperature_points_data = data.get("temperature_points", [])
+            for point_data in temperature_points_data:
+                point = TemperaturePoint.from_dict(point_data)
+                material.temperature_map[point.temperature] = point
         
         return material
 

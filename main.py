@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 from loguru import logger
 
-from parser.json_parser import BTDJsonParser, BTDJsonParsingError
+from core.thermal_info import ThermalInfo, BTDJsonParsingError
 from converter.mph_converter import MPHConverter, ComsolCreationError
 
 
@@ -76,15 +76,9 @@ def parse_btd_file(input_file: Path) -> Optional[object]:
     try:
         logger.info(f"开始解析BTD文件: {input_file}")
         
-        # 创建JSON解析器
-        parser = BTDJsonParser()
-        
-        # 解析文件
-        thermal_info = parser.parse_file(input_file)
-        
-        if not thermal_info:
-            logger.error("BTD文件解析失败，未返回ThermalInfo对象")
-            return None
+        # 创建ThermalInfo对象并加载JSON文件
+        thermal_info = ThermalInfo()
+        thermal_info.load_from_json(input_file)
         
         logger.info("BTD文件解析完成")
         return thermal_info

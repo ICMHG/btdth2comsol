@@ -183,21 +183,34 @@ class BumpSection(Section):
         return self
     
     def from_json(self, json_data: Dict[str, Any]) -> None:
-        """从JSON数据加载"""
+        """从JSON数据加载，支持BTD格式"""
         try:
-            super().from_json(json_data)
+            # 设置基本信息
+            self.name = json_data.get("name", "")
+            self.layer = json_data.get("layer", "")
+            type_str = json_data.get("type", "")
+            if type_str:
+                try:
+                    from .geometry import ComponentType
+                    self.type = ComponentType(type_str)
+                except ValueError:
+                    logger.warning(f"Unknown component type: {type_str}, using UNKNOWN")
+                    self.type = ComponentType.UNKNOWN
+            else:
+                self.type = ComponentType.UNKNOWN
             
-            # 加载凸点区域特有属性
-            self.lower_die = json_data.get("lowerDie", "")
-            self.bump_type = json_data.get("bumpType", 0)
-            self.bump_file = json_data.get("bumpFile", "")
-            self.underfill_material = json_data.get("underfillMaterial", "")
-            self.connection_type = json_data.get("connectionType", "")
-            self.is_modify = json_data.get("isModify", False)
+            # 加载凸点区域特有属性，支持BTD格式的字段名
+            self.lower_die = json_data.get("lower_die", json_data.get("lowerDie", ""))
+            self.bump_type = json_data.get("bump_type", json_data.get("bumpType", 0))
+            self.bump_file = json_data.get("bump_file", json_data.get("bumpFile", ""))
+            self.underfill_material = json_data.get("underfill_material", json_data.get("underfillMaterial", ""))
+            self.connection_type = json_data.get("connection_type", json_data.get("connectionType", ""))
+            self.is_modify = json_data.get("is_modify", json_data.get("isModify", False))
             
             # 加载凸点阵列
-            if "bumpArray" in json_data:
-                self.bump_array = BumpArray(json_data["bumpArray"])
+            if "bump_array" in json_data or "bumpArray" in json_data:
+                bump_array_data = json_data.get("bump_array", json_data.get("bumpArray", {}))
+                self.bump_array = BumpArray(bump_array_data)
             
             logger.debug(f"Loaded BumpSection: {self.name}")
             

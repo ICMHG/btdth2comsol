@@ -1,0 +1,52 @@
+{
+    "configurations": [
+        {
+            "name": "Run main.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "COMSOL_ROOT": "${env:HOME}/SHARE/comosl62/multiphysics",
+                "PATH": "${env:PATH}:${env:HOME}/SHARE/comosl62/multiphysics/bin",
+                "LD_LIBRARY_PATH": "${env:LD_LIBRARY_PATH}:${env:HOME}/SHARE/comosl62/multiphysics/lib/glnxa64"
+            }
+        },
+        {
+            "name": "Run main.py with K1CASE1",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "K1CASE1.btd_th",
+                "test_output.mph"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "COMSOL_ROOT": "${env:HOME}/SHARE/comosl62/multiphysics",
+                "PATH": "${env:PATH}:${env:HOME}/SHARE/comosl62/multiphysics/bin",
+                "LD_LIBRARY_PATH": "${env:LD_LIBRARY_PATH}:${env:HOME}/SHARE/comosl62/multiphysics/lib/glnxa64"
+            }
+        },
+        {
+            "name": "Run main.py with simple",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "simple.btd_th",
+                "simple.mph",
+                "-v"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "COMSOL_ROOT": "${env:HOME}/SHARE/comosl62/multiphysics",
+                "PATH": "${env:PATH}:${env:HOME}/SHARE/comosl62/multiphysics/bin",
+                "LD_LIBRARY_PATH": "${env:LD_LIBRARY_PATH}:${env:HOME}/SHARE/comosl62/multiphysics/lib/glnxa64"
+            }
+        }
+    ]
+}

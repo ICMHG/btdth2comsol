@@ -92,7 +92,7 @@ class MainConverter:
             return True
             
         except Exception as e:
-            logger.error(f"Conversion failed: {e}")
+            logger.error(f"Conversion2 failed: {e}")
             return False
         
         finally:

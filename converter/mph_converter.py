@@ -22,6 +22,9 @@ class MPHConverter:
         """初始化转换器"""
         self.model = None
         self.thermal_info = None
+        self.geometry_objects = {}  # 保存几何体对象的字典
+        self.material_objects = {}  # 保存材料对象的字典
+        self.material_selection_inputs = {}  # material_name -> set of geom selection names
         logger.debug("MPHConverter initialized")
     
     def convert(self, thermal_info: ThermalInfo, output_file: Path) -> bool:
@@ -42,7 +45,7 @@ class MPHConverter:
             logger.info(f"Starting conversion to: {output_file}")
             
             self.thermal_info = thermal_info
-            
+            thermal_info.init_runtime_sections()
             # 验证输入数据
             if not thermal_info.validate():
                 logger.error("ThermalInfo validation failed")
@@ -51,11 +54,8 @@ class MPHConverter:
             # 创建COMSOL模型
             self._create_model()
             
-            # 创建装配体
-            assembly = self._create_assembly()
-            
-            # 添加所有几何区域
-            self._add_all_sections_to_assembly(assembly, thermal_info)
+            # 从ThermalInfo中获取sections并创建几何
+            self._create_geometry_from_sections(thermal_info)
             
             # 设置材料
             self._setup_materials(thermal_info)
@@ -66,8 +66,11 @@ class MPHConverter:
             # 生成网格
             self._generate_mesh(thermal_info)
             
-            # 设置求解器
-            self._setup_solver(thermal_info)
+            # 设置稳态热研究
+            self._setup_steady_heat_study()
+            
+            # 设置求解器并求解 - 暂时注释掉，手动执行求解
+            # self._setup_solver(thermal_info)
             
             # 保存文件
             self._save_file(output_file)
@@ -76,7 +79,7 @@ class MPHConverter:
             return True
             
         except Exception as e:
-            logger.error(f"Conversion failed: {e}")
+            logger.error(f"Conversion1 failed: {e}")
             if isinstance(e, ComsolCreationError):
                 raise
             raise ComsolCreationError(f"Conversion failed: {e}")
@@ -88,113 +91,428 @@ class MPHConverter:
         try:
             # 尝试导入MPh库
             import mph
+            logger.debug("MPh library imported successfully")
             
             # 启动COMSOL客户端
             self.client = mph.start(cores=1)
-            logger.debug("COMSOL client started successfully")
+            logger.debug(f"COMSOL client started successfully: {type(self.client)}")
             
             # 创建新模型
             self.model = self.client.create('Model')
-            logger.debug("COMSOL model created successfully")
+            logger.debug(f"COMSOL model created successfully: {type(self.model)}")
+            logger.debug(f"Model name: {self.model.name()}")
+            logger.debug(f"Model attributes: {[attr for attr in dir(self.model) if not attr.startswith('_')]}")
+            
+            # 创建组件
+            components = self.model/'components'
+            components.create(True, name='component')
+            
+            # 创建几何容器 - 使用正确的MPh API
+            geometries = self.model/'geometries'
+            self.geometry = geometries.create(3, name='geometry')  # 3D几何
+            logger.debug(f"Geometry container created successfully: {type(self.geometry)}")
+            
+            # 设置几何长度单位为纳米(nm) —— 仅按参考实现
+            try:
+                j = self.model.java
+                j.component('comp1').geom('geom1').lengthUnit('nm')
+                logger.debug("Set geometry length unit to nm via Java API (comp1/geom1)")
+            except Exception as e:
+                logger.warning(f"Failed to set geometry length unit: {e}")
+            
+            # 添加参数d设置为1 [nm]
+            try:
+                self.model.parameter('d', '1 [nm]')
+                logger.debug("Added parameter d = 1 [nm]")
+            except Exception as e:
+                logger.warning(f"Failed to add parameter d: {e}")
             
         except ImportError:
             raise ComsolCreationError("MPh library not available. Please install it with: pip install mph")
         except Exception as e:
             raise ComsolCreationError(f"Failed to create COMSOL model: {e}")
     
-    def _create_assembly(self):
-        """创建装配体"""
-        logger.debug("Creating assembly")
+    def _create_geometry_from_sections(self, thermal_info: ThermalInfo) -> None:
+        """从ThermalInfo中的sections创建几何"""
+        logger.debug("Creating geometry from sections")
         
         try:
-            # 创建3D装配体几何
-            assembly = self.model.geom.create("assembly", 3)
+            # 从ThermalInfo中获取sections
+            sections = thermal_info.init_runtime_sections()
+            logger.debug(f"Found {len(sections)} sections to process")
             
-            # 设置装配体参数
-            assembly.set("createselection", True)
-            assembly.set("show", True)
+            # 存储每个section的几何对象
+            section_geometries = {}
             
-            logger.debug("Assembly created successfully")
-            return assembly
+            # 为每个section创建几何体
+            for section_index, section in enumerate(sections):
+                logger.debug(f"Processing section {section_index}: {section.get_name()}")
+                section_geom = self._create_section_geometry(section, section_index)
+                if section_geom:
+                    section_geometries[section.get_name()] = section_geom
+                
+            # 创建装配体，将所有section的几何体组装起来
+            if section_geometries:
+                self._create_assembly_from_geometries(section_geometries)
+                
+            logger.debug(f"Successfully created geometry from {len(sections)} sections")
+            
         except Exception as e:
-            raise ComsolCreationError(f"Failed to create assembly: {e}")
+            logger.error(f"Failed to create geometry from sections: {e}")
+            raise ComsolCreationError(f"Failed to create geometry from sections: {e}")
     
-    def _add_all_sections_to_assembly(self, assembly, thermal_info: ThermalInfo) -> None:
-        """添加所有几何区域到装配体"""
-        logger.debug("Adding sections to assembly")
-        
-        try:
-            # 添加普通sections
-            sections = thermal_info.get_all_sections()
-            for i, section in enumerate(sections):
-                self._add_section_to_assembly(assembly, section, i)
-            
-            # 添加封装芯片组件
-            pkg_components = thermal_info.get_pkg_components()
-            for i, pkg_comp in enumerate(pkg_components):
-                self._add_pkg_component_to_assembly(assembly, pkg_comp, i)
-            
-            # 添加堆叠芯片区域
-            stacked_dies = thermal_info.get_stacked_die_sections()
-            for i, stacked_die in enumerate(stacked_dies):
-                self._add_stacked_die_to_assembly(assembly, stacked_die, i)
-            
-            # 添加凸点区域
-            bump_sections = thermal_info.get_bump_sections()
-            for i, bump_section in enumerate(bump_sections):
-                self._add_bump_section_to_assembly(assembly, bump_section, i)
-            
-            total_components = len(sections) + len(pkg_components) + len(stacked_dies) + len(bump_sections)
-            logger.debug(f"Added {total_components} total components to assembly")
-        except Exception as e:
-            raise ComsolCreationError(f"Failed to add sections to assembly: {e}")
     
-    def _add_section_to_assembly(self, assembly, section, section_index: int) -> None:
-        """将单个Section添加到装配体"""
+    def _create_section_geometry(self, section, section_index: int):
+        """为单个section创建几何体，返回创建的几何对象"""
         try:
             # 验证section对象
             if not self._validate_section(section):
                 logger.warning(f"Section {section.get_name()} validation failed, skipping")
-                return
+                return None
             
-            # 确保assembly对象有geom属性（用于模拟环境）
-            if not hasattr(assembly, 'geom'):
-                logger.debug("Assembly缺少geom属性，添加模拟geom属性")
-                try:
-                    from test_mph_conversion_mock import MockGeometry
-                    assembly.geom = MockGeometry()
-                except ImportError:
-                    # 如果在非测试环境中，这是一个真正的错误
-                    logger.error("Assembly对象缺少geom属性，且无法导入模拟类")
-                    raise ComsolCreationError("Assembly对象缺少geom属性")
+            logger.debug(f"Creating geometry for section: {section.get_name()}")
             
-            # 创建几何对象名称
-            geom_name = f"geom_{section_index}_{section.get_name()}"
+            # 1. 首先创建section本身的shape（如果存在）
+            section_shape_geometry = None
+            if hasattr(section, 'shape') and section.shape:
+                logger.debug(f"Section {section.get_name()} has its own shape, creating section shape geometry")
+                section_shape_geometry = self._create_shape_from_section(section, section_index)
+                if section_shape_geometry:
+                    logger.debug(f"Created section shape geometry for {section.get_name()}")
+                else:
+                    logger.warning(f"Failed to create section shape geometry for {section.get_name()}")
             
-            # 创建几何对象
-            geom = assembly.geom.create(geom_name, 3)
-            
-            # 添加主形状
-            if section.shape:
-                self._add_shape_to_geometry(geom, section.shape)
-            
-            # 递归处理子组件
-            if section.children:
-                for child in section.children:
-                    self._add_child_to_geometry(geom, child)
+            # 2. 创建所有components的几何
+            component_geometries = []
+            if hasattr(section, 'children') and section.children:
+                logger.debug(f"Section {section.get_name()} has {len(section.children)} children")
                 
-                # 设置布尔运算
-                self._setup_boolean_operations(geom, section.children)
+                # 逐一处理每个child，创建几何对象
+                for comp_index, child in enumerate(section.children):
+                    logger.debug(f"Processing child {comp_index}: {type(child).__name__}")
+                    logger.debug(f"  - Has shape: {hasattr(child, 'shape') and child.shape is not None}")
+                    logger.debug(f"  - Template name: {getattr(child, 'template_name', 'None')}")
+                    
+                    # 根据child的shape类型生成不同的几何形状
+                    if hasattr(child, 'shape') and child.shape:
+                        comp_geom = self._create_shape_from_component(child, section_index, section.get_name(), comp_index)
+                        if comp_geom:
+                            component_geometries.append(comp_geom)
+                    else:
+                        logger.warning(f"Child {comp_index} has no shape, skipping")
+                        # 尝试手动解析模板
+                        if hasattr(child, 'template_name') and child.template_name:
+                            logger.debug(f"Attempting to parse template: {child.template_name}")
+            else:
+                logger.debug(f"Section {section.get_name()} has no children")
             
-            # 设置材料
-            if section.material:
-                self._assign_material_to_geometry(geom, section.material)
+            # 3. 根据section shape和components的情况决定最终的几何
+            if section_shape_geometry and component_geometries:
+                # 有section shape和components，需要做布尔运算：section shape - components
+                logger.debug(f"Section {section.get_name()} has both shape and components, performing boolean operations")
+                return self._create_section_with_boolean_operations(section, section_shape_geometry, component_geometries, section_index)
+            elif section_shape_geometry:
+                # 只有section shape，没有components
+                logger.debug(f"Section {section.get_name()} has only shape, no components")
+                return section_shape_geometry
+            elif component_geometries:
+                # 只有components，没有section shape，使用原来的逻辑
+                logger.debug(f"Section {section.get_name()} has only components, no section shape")
+                return self._create_components_union(component_geometries, section.get_name(), section_index)
+            else:
+                # 既没有section shape也没有components
+                logger.debug(f"Section {section.get_name()} has no shape and no components, no geometry created")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to create section geometry {section.get_name()}: {e}")
+            raise ComsolCreationError(f"Failed to create section geometry: {e}")
+    
+    def _create_shape_from_section(self, section, section_index: int):
+        """从section的shape创建几何对象"""
+        try:
+            shape = section.shape
+            shape_type = type(shape).__name__.lower()
+            geom_name = self._get_section_geom_name(section_index, section.get_name())
             
-            logger.debug(f"Added section {section.get_name()} to assembly")
+            logger.debug(f"Creating section shape geometry: {geom_name}, type: {shape_type}")
+            
+            # 根据shape类型创建相应的几何
+            if shape_type == "cube":
+                return self._create_cube_geometry(shape, geom_name, section)
+            elif shape_type == "cylinder":
+                return self._create_cylinder_geometry(shape, geom_name, section)
+            elif shape_type == "sphere":
+                return self._create_sphere_geometry(shape, geom_name, section)
+            else:
+                logger.warning(f"Unknown section shape type: {shape_type}, using generic method")
+                return self._create_generic_geometry(shape, geom_name, section)
+                
+        except Exception as e:
+            logger.error(f"Failed to create shape from section: {e}")
+            raise ComsolCreationError(f"Failed to create shape from section: {e}")
+    
+    def _create_section_with_boolean_operations(self, section, section_shape_geometry, component_geometries, section_index):
+        """创建section几何，执行布尔运算：section shape - components"""
+        try:
+            section_name = section.get_name()
+            logger.debug(f"Creating boolean operations for section {section_name}")
+            
+            # 如果有多个components，先创建它们的Union
+            if len(component_geometries) > 1:
+                components_union_name = f"components_union_{section_name}_{section_index}"
+                components_union = self.geometry.create('Union', name=components_union_name)
+                components_union.java.selection('input').set(*[geom.tag() for geom in component_geometries])
+                components_geometry = components_union
+                logger.debug(f"Created components union for section {section_name}")
+            else:
+                components_geometry = component_geometries[0]
+                logger.debug(f"Using single component for section {section_name}")
+            
+            # 按需求：跳过Difference操作（section_diff_*），直接使用已创建的Union结果
+            logger.debug(f"Skip difference operation for section {section_name}; use components union directly")
+            return components_geometry
             
         except Exception as e:
-            logger.error(f"Failed to add section {section.get_name()}: {e}")
-            raise ComsolCreationError(f"Failed to add section to assembly: {e}")
+            logger.error(f"Failed to create boolean operations for section: {e}")
+            raise ComsolCreationError(f"Failed to create boolean operations for section: {e}")
+    
+    def _create_components_union(self, component_geometries, section_name, section_index):
+        """创建components的联合几何"""
+        try:
+            if len(component_geometries) > 1:
+                # 有多个component，创建Union将它们组合
+                section_geom_name = f"section_union_{section_name}_{section_index}"
+                section_geometry = self.geometry.create('Union', name=section_geom_name)
+                section_geometry.java.selection('input').set(*[geom.tag() for geom in component_geometries])
+                
+                # 为联合几何创建材料选择组（使用第一个component的材料作为代表）
+                if component_geometries and hasattr(component_geometries[0], 'material'):
+                    # 创建一个虚拟的component对象来传递材料信息
+                    class VirtualComponent:
+                        def __init__(self, material):
+                            self.material = material
+                    
+                    # 使用第一个component的材料
+                    virtual_component = VirtualComponent(component_geometries[0].material)
+                    self._create_material_selection(section_geom_name, virtual_component)
+                
+                logger.debug(f"Created union geometry for section {section_name} with {len(component_geometries)} components")
+                return section_geometry
+            elif len(component_geometries) == 1:
+                # 只有一个component，直接使用它
+                logger.debug(f"Section {section_name} has single component geometry")
+                return component_geometries[0]
+            else:
+                # 没有components
+                logger.debug(f"Section {section_name} has no components")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to create components union: {e}")
+            raise ComsolCreationError(f"Failed to create components union: {e}")
+    
+    def _create_assembly_from_geometries(self, section_geometries) -> None:
+        """将多个section的几何体组装成装配体"""
+        try:
+            logger.debug("Creating assembly from section geometries")
+            
+            if not section_geometries:
+                logger.debug("No section geometries to assemble")
+                return
+            
+            # 获取所有section几何对象
+            geometry_list = list(section_geometries.values())
+            
+            if len(geometry_list) == 1:
+                logger.debug("Only one section geometry, no assembly needed")
+                return
+            
+            # 创建装配体 - 使用Union操作将所有section几何体组合
+            assembly_name = "assembly"
+            try:
+                assembly = self.geometry.create('Union', name=assembly_name)
+                # 设置输入几何对象 - 使用selection方式
+                assembly.java.selection('input').set(*[geom.tag() for geom in geometry_list])
+                logger.debug(f"Created assembly with {len(geometry_list)} section geometries")
+            except Exception as e:
+                logger.warning(f"Failed to create assembly Union: {e}")
+                logger.debug("Skipping assembly creation due to Union error")
+            
+        except Exception as e:
+            logger.error(f"Failed to create assembly from geometries: {e}")
+            raise ComsolCreationError(f"Failed to create assembly from geometries: {e}")
+    
+    def _create_shape_from_component(self, component, section_index: int, section_name: str, comp_index: int):
+        """根据component的shape类型创建不同的几何形状，返回创建的几何对象"""
+        try:
+            shape = component.shape
+            shape_type = type(shape).__name__
+            logger.debug(f"Creating shape of type: {shape_type}")
+            
+            # 创建几何对象名称
+            geom_name = self._get_component_geom_name(section_index, section_name, comp_index)
+            
+            # 根据不同的shape类型创建不同的几何对象
+            if shape_type == "Cube":
+                return self._create_cube_geometry(shape, geom_name, component)
+            elif shape_type == "Cylinder":
+                return self._create_cylinder_geometry(shape, geom_name, component)
+            elif shape_type == "Sphere":
+                return self._create_sphere_geometry(shape, geom_name, component)
+            else:
+                logger.warning(f"Unknown shape type: {shape_type}, using generic method")
+                return self._create_generic_geometry(shape, geom_name, component)
+                
+        except Exception as e:
+            logger.error(f"Failed to create shape from component: {e}")
+            raise ComsolCreationError(f"Failed to create shape from component: {e}")
+    
+    def _create_cube_geometry(self, shape, geom_name: str, component):
+        """创建立方体几何，返回创建的几何对象"""
+        try:
+            logger.debug(f"Creating cube geometry: {geom_name}")
+            
+            # 创建Block几何对象 - 使用正确的MPh API
+            block = self.geometry.create('Block', name=geom_name)
+            
+            # 设置立方体参数
+            if hasattr(shape, 'length') and hasattr(shape, 'width') and hasattr(shape, 'height'):
+                block.property('size', [shape.length, shape.width, shape.height])
+            
+            # 设置位置
+            if hasattr(shape, 'position') and shape.position:
+                pos = shape.position
+                block.property('pos', [pos.x, pos.y, pos.z])
+            
+            # 启用结果选择输出到域
+            try:
+                block.property('selresult', 'on')
+                block.property('selresultshow', 'dom')
+            except Exception:
+                pass
+            
+            # 为材料创建对应的选择组
+            self._create_material_selection(geom_name, component)
+            
+            # 保存几何体对象到字典中
+            self.geometry_objects[geom_name] = block
+            
+            logger.debug(f"Created cube geometry: {geom_name}")
+            return block
+            
+        except Exception as e:
+            logger.error(f"Failed to create cube geometry: {e}")
+            raise
+    
+    def _create_cylinder_geometry(self, shape, geom_name: str, component):
+        """创建圆柱体几何，返回创建的几何对象"""
+        try:
+            logger.debug(f"Creating cylinder geometry: {geom_name}")
+            
+            # 创建Cylinder几何对象 - 使用正确的MPh API
+            cylinder = self.geometry.create('Cylinder', name=geom_name)
+            
+            # 设置圆柱体参数
+            if hasattr(shape, 'radius') and shape.radius:
+                cylinder.property('r', shape.radius)
+            
+            if hasattr(shape, 'height') and shape.height:
+                cylinder.property('h', shape.height)
+            
+            # 设置位置
+            if hasattr(shape, 'position') and shape.position:
+                pos = shape.position
+                cylinder.property('pos', [pos.x, pos.y, pos.z])
+            
+            # 启用结果选择输出到域
+            try:
+                cylinder.property('selresult', 'on')
+                cylinder.property('selresultshow', 'dom')
+            except Exception:
+                pass
+            
+            # 为材料创建对应的选择组
+            self._create_material_selection(geom_name, component)
+            
+            # 保存几何体对象到字典中
+            self.geometry_objects[geom_name] = cylinder
+            
+            logger.debug(f"Created cylinder geometry: {geom_name}")
+            return cylinder
+            
+        except Exception as e:
+            logger.error(f"Failed to create cylinder geometry: {e}")
+            raise
+    
+    def _create_sphere_geometry(self, shape, geom_name: str, component):
+        """创建球体几何，返回创建的几何对象"""
+        try:
+            logger.debug(f"Creating sphere geometry: {geom_name}")
+            
+            # 创建Sphere几何对象 - 使用正确的MPh API
+            sphere = self.geometry.create('Sphere', name=geom_name)
+            
+            # 设置球体参数
+            if hasattr(shape, 'radius') and shape.radius:
+                sphere.property('r', shape.radius)
+            
+            # 设置位置
+            if hasattr(shape, 'position') and shape.position:
+                pos = shape.position
+                sphere.property('pos', [pos.x, pos.y, pos.z])
+            
+            # 启用结果选择输出到域
+            try:
+                sphere.property('selresult', 'on')
+                sphere.property('selresultshow', 'dom')
+            except Exception:
+                pass
+            
+            # 为材料创建对应的选择组
+            self._create_material_selection(geom_name, component)
+            
+            # 保存几何体对象到字典中
+            self.geometry_objects[geom_name] = sphere
+            
+            logger.debug(f"Created sphere geometry: {geom_name}")
+            return sphere
+            
+        except Exception as e:
+            logger.error(f"Failed to create sphere geometry: {e}")
+            raise
+    
+    def _create_generic_geometry(self, shape, geom_name: str, component):
+        """创建通用几何对象，返回创建的几何对象"""
+        try:
+            logger.debug(f"Creating generic geometry: {geom_name}")
+            
+            # 默认创建Block几何对象 - 使用正确的MPh API
+            block = self.geometry.create('Block', name=geom_name)
+            
+            # 设置默认参数
+            block.property('size', [1, 1, 1])
+            block.property('pos', [0, 0, 0])
+            
+            # 启用结果选择输出到域
+            try:
+                block.property('selresult', 'on')
+                block.property('selresultshow', 'dom')
+            except Exception:
+                pass
+            
+            # 为材料创建对应的选择组
+            self._create_material_selection(geom_name, component)
+            
+            # 保存几何体对象到字典中
+            self.geometry_objects[geom_name] = block
+            
+            logger.debug(f"Created generic geometry: {geom_name}")
+            return block
+            
+        except Exception as e:
+            logger.error(f"Failed to create generic geometry: {e}")
+            raise
     
     def _validate_section(self, section) -> bool:
         """验证Section对象"""
@@ -202,10 +520,6 @@ class MPHConverter:
             # 检查必需属性
             if not hasattr(section, 'name') or not section.name:
                 logger.warning("Section missing name")
-                return False
-            
-            if not hasattr(section, 'thickness') or section.thickness <= 0:
-                logger.warning(f"Section {section.name} has invalid thickness: {getattr(section, 'thickness', 'None')}")
                 return False
             
             # 检查形状
@@ -915,7 +1229,7 @@ class MPHConverter:
         """添加子组件到几何"""
         try:
             # 创建子几何对象
-            child_geom = geom.geom.create(f"child_{child.name}", 3)
+            child_geom = geom.create(f"child_{child.name}", "Block")
             
             # 添加形状（如果有）
             if hasattr(child, 'shape') and child.shape:
@@ -964,84 +1278,302 @@ class MPHConverter:
             logger.warning(f"Failed to assign material: {e}")
     
     def _setup_materials(self, thermal_info: ThermalInfo) -> None:
-        """设置材料"""
-        logger.debug("Setting up materials")
+        """设置材料，使用自定义材料并从materialmgr获取材料信息"""
+        logger.debug("Setting up custom materials from material manager")
         
         try:
+            # 获取材料管理器
+            materials_mgr = thermal_info.get_materials_mgr()
+            
             # 获取所有使用的材料名称
-            material_names = thermal_info.get_all_used_material_names()
+            used_material_names = thermal_info.get_all_used_material_names()
+            logger.debug(f"Found {len(used_material_names)} unique materials to create")
             
-            # 创建COMSOL材料对象
-            for material_name in material_names:
-                material_info = thermal_info.get_materials_mgr().get_material(material_name)
+            # 创建所有使用的材料
+            created_materials = {}
+            for material_name in used_material_names:
+                material_info = materials_mgr.get_material(material_name)
                 if material_info:
-                    self._create_comsol_material(material_info)
+                    # 创建COMSOL自定义材料
+                    comsol_material_name = self._create_comsol_material(material_info)
+                    if comsol_material_name:  # 只有成功创建的材料才添加到字典中
+                        created_materials[material_name] = comsol_material_name
+                        logger.debug(f"Created COMSOL material: {comsol_material_name} for {material_name}")
+                    else:
+                        logger.warning(f"Skipped material creation for: {material_name}")
+                else:
+                    logger.warning(f"Material {material_name} not found in material manager")
             
-            logger.debug(f"Created {len(material_names)} materials")
+            # 统一创建材料对应的选择组（Union）
+            self._build_material_selection_groups()
+            
+            # 将材料应用到几何对象
+            self._apply_materials_to_geometry(thermal_info, created_materials)
+            
+            logger.debug("Successfully set up all custom materials")
             
         except Exception as e:
             raise ComsolCreationError(f"Failed to setup materials: {e}")
     
-    def _create_comsol_material(self, material_info) -> None:
-        """创建COMSOL材料"""
+    def _get_section_geom_name(self, section_index: int, section_name: str) -> str:
+        """生成section几何体名称"""
+        return f"section_{section_name}_{section_index}"
+    
+    def _get_component_geom_name(self, section_index: int, section_name: str, comp_index: int) -> str:
+        """获取（并在创建时使用）component几何体的规范名称"""
+        return f"{self._get_section_geom_name(section_index, section_name)}_comp_{comp_index}"
+    
+    def _get_pkg_component_geom_name(self, comp_index: int, component_name: str) -> str:
+        """生成PkgComponent几何体名称"""
+        return f"pkg_component_{comp_index}_{component_name}"
+    
+    def _create_material_selection(self, geom_name: str, component) -> None:
+        """为材料创建对应的选择组（延后统一构建）"""
         try:
-            # 创建材料对象
-            material_name = f"mat_{material_info.name}"
-            material = self.model.material.create(material_name)
+            # 检查component是否有材料
+            if not hasattr(component, 'material') or not component.material:
+                logger.debug(f"Component {geom_name} has no material, skipping selection creation queueing")
+                return
             
-            # 根据材料类型设置属性
-            if hasattr(material_info, 'material_type'):
-                if material_info.material_type == "composite":
-                    self._setup_composite_material(material, material_info)
-                elif material_info.material_type == "object":
-                    self._setup_object_material(material, material_info)
-                else:
-                    # 基础材料
-                    if material_info.is_temperature_dependent():
-                        self._setup_temperature_dependent_material(material, material_info)
+            # 获取材料名称（原始名，如 FR4）
+            material_name = self._get_material_name(component.material)
+            logger.debug(f"Queue material selection for {material_name} on geometry {geom_name}")
+            
+            # 记录到缓冲映射，稍后统一创建Union选择组
+            name_set = self.material_selection_inputs.get(material_name)
+            if name_set is None:
+                name_set = set()
+                self.material_selection_inputs[material_name] = name_set
+            name_set.add(geom_name)
+        except Exception as e:
+            logger.warning(f"Failed to queue material selection for {geom_name}: {e}")
+    
+    def _build_material_selection_groups(self) -> None:
+        """根据已记录的映射为每种材料创建/更新Union选择组"""
+        try:
+            if not self.material_selection_inputs:
+                return
+            selections = self.model/'selections'
+            for material_name, geom_names in self.material_selection_inputs.items():
+                if not geom_names:
+                    continue
+                sel_name = f"sel_{material_name}"
+                try:
+                    if sel_name in selections:
+                        sel_node = selections/sel_name
                     else:
-                        self._setup_constant_material(material, material_info)
-            else:
-                # 默认作为基础材料处理
-                if material_info.is_temperature_dependent():
-                    self._setup_temperature_dependent_material(material, material_info)
-                else:
-                    self._setup_constant_material(material, material_info)
+                        sel_node = selections.create('Union', name=sel_name)
+                    # 将名称转换为可用的选择节点 tag 列表
+                    input_tags = []
+                    for name in geom_names:
+                        if name in selections:
+                            try:
+                                input_tags.append((selections/name).tag())
+                            except Exception:
+                                pass
+                    if not input_tags:
+                        logger.debug(f"No valid inputs for selection {sel_name} yet; skip")
+                        continue
+                    # 优先使用 java.selection 接口
+                    try:
+                        sel_node.java.selection('input').set(*input_tags)
+                    except Exception:
+                        # 回退到 property 接口
+                        try:
+                            sel_node.property('input', input_tags)
+                        except Exception:
+                            logger.warning(f"Failed to set inputs for selection {sel_name}")
+                    # 尝试设置为3D域
+                    try:
+                        sel_node.property('entitydim', 3)
+                    except Exception:
+                        pass
+                    logger.debug(f"Built/updated material selection group {sel_name} with {len(input_tags)} inputs")
+                except Exception as ie:
+                    logger.warning(f"Failed to build selection group for material {material_name}: {ie}")
+        except Exception as e:
+            logger.warning(f"Failed to build material selection groups: {e}")
+    
+    def _apply_materials_to_geometry(self, thermal_info: ThermalInfo, created_materials: Dict[str, str]) -> None:
+        """将创建的材料应用到对应的几何对象"""
+        try:
+            logger.debug("Applying materials to geometry objects")
             
-            logger.debug(f"Created material: {material_name}")
+            # 获取运行时sections
+            sections = thermal_info.get_runtime_sections()
+            
+            for section_index, section in enumerate(sections):
+                logger.debug(f"Applying materials for section: {section.get_name()}")
+                
+                # 处理section本身的材料
+                if hasattr(section, 'material') and section.material:
+                    material_name = self._get_material_name(section.material)
+                    if material_name in created_materials:
+                        comsol_material_name = created_materials[material_name]
+                        section_geom_name = self._get_section_geom_name(section_index, section.get_name())
+                        self._apply_material_to_geometry(comsol_material_name, section_geom_name)
+                
+                # 处理section的components
+                if hasattr(section, 'children') and section.children:
+                    for comp_index, component in enumerate(section.children):
+                        if hasattr(component, 'material') and component.material:
+                            material_name = self._get_material_name(component.material)
+                            if material_name in created_materials:
+                                comsol_material_name = created_materials[material_name]
+                                geom_name = self._get_component_geom_name(section_index, section.get_name(), comp_index)
+                                self._apply_material_to_geometry(comsol_material_name, geom_name)
+            
+            # 处理PkgDie中的PkgComponent材料
+            if thermal_info.parts:
+                logger.debug("Applying materials for PkgDie components")
+                for comp_index, component in enumerate(thermal_info.parts.get_components()):
+                    if hasattr(component, 'material') and component.material:
+                        material_name = self._get_material_name(component.material)
+                        if material_name in created_materials:
+                            comsol_material_name = created_materials[material_name]
+                            # 使用宏生成PkgComponent的几何体名称
+                            geom_name = self._get_pkg_component_geom_name(comp_index, component.get_mdl_name())
+                            self._apply_material_to_geometry(comsol_material_name, geom_name)
+                            logger.debug(f"Applied material {material_name} to PkgComponent {component.get_mdl_name()}")
+            
+            logger.debug("Successfully applied all materials to geometry")
+            
+        except Exception as e:
+            raise ComsolCreationError(f"Failed to apply materials to geometry: {e}")
+    
+    def _get_material_name(self, material) -> str:
+        """获取材料名称，支持MaterialInfo和CompositeMaterial"""
+        if hasattr(material, 'name'):
+            return material.name
+        elif isinstance(material, str):
+            return material
+        else:
+            return str(material)
+    
+    def _apply_material_to_geometry(self, material_name: str, geom_name: str) -> None:
+        """将材料应用到对应的几何对象（使用材料对应的选择组）"""
+        try:
+            logger.debug(f"Applying material {material_name} to geometry {geom_name}")
+            
+            material = self.material_objects.get(material_name)
+            if not material:
+                logger.warning(f"Material object {material_name} not found in saved objects")
+                return
+            
+            # 从COMSOL材料名称中提取原始材料名称
+            # material_name格式为 "mat_原始材料名"，需要提取原始材料名
+            if material_name.startswith('mat_'):
+                original_material_name = material_name[4:]  # 去掉 "mat_" 前缀
+            else:
+                original_material_name = material_name
+            
+            # 使用原始材料名称创建选择组名称
+            material_selection_name = f"sel_{original_material_name}"
+            selections = self.model/'selections'
+            
+            if material_selection_name in selections:
+                # 直接使用材料对应的选择组
+                sel_node = selections/material_selection_name
+                material.select(sel_node)
+                logger.debug(f"Material {material_name} bound to material selection {material_selection_name}")
+            else:
+                # 回退到原来的逻辑：按几何名匹配 selection
+                logger.warning(f"Material selection {material_selection_name} not found, falling back to geometry-based selection")
+                sel_node = None
+                
+                # 直接按几何名匹配 selection
+                if geom_name in selections:
+                    sel_node = selections/geom_name
+                else:
+                    # 模糊匹配：在所有 selection 名称里查包含几何名的项，优先 entitydim=3（如果存在）
+                    try:
+                        candidate_names = [name for name in self.model.selections() if geom_name in name]
+                    except Exception:
+                        candidate_names = []
+                    for name in candidate_names:
+                        node = selections/name
+                        try:
+                            props = node.properties()
+                            ent = props.get('entitydim', None)
+                            if ent in (3, '3', 3.0):
+                                sel_node = node
+                                break
+                            if sel_node is None:
+                                sel_node = node
+                        except Exception:
+                            sel_node = node
+                            break
+                
+                if not sel_node:
+                    logger.warning(f"No selection node found for geometry {geom_name}; skip material apply")
+                    return
+                
+                material.select(sel_node)
+                logger.debug(f"Material {material_name} bound to geometry-based selection for {geom_name}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to apply material {material_name} to geometry {geom_name}: {e}")
+    
+    def _create_comsol_material(self, material_info) -> str:
+        """创建COMSOL自定义材料"""
+        try:
+            # 创建自定义材料对象 - 使用正确的MPh API
+            material_name = f"mat_{material_info.name}"
+            materials = self.model/'materials'
+            material = materials.create('Common', name=material_name)
+            
+            # 所有材料都作为基础材料处理，material_type都是"thermal"
+            if material_info.is_temperature_dependent():
+                self._setup_temperature_dependent_material(material, material_info)
+            else:
+                self._setup_constant_material(material, material_info)
+            
+            # 保存材料对象到字典中
+            self.material_objects[material_name] = material
+            
+            logger.debug(f"Created custom material: {material_name}")
+            return material_name
             
         except Exception as e:
             raise ComsolCreationError(f"Failed to create material {material_info.name}: {e}")
     
     def _setup_temperature_dependent_material(self, material, material_info) -> None:
-        """设置温度依赖性材料"""
+        """设置温度依赖性材料（当前禁用温变：使用首个温度点常数属性）"""
         try:
-            # 创建温度函数
-            temp_func_name = f"temp_{material_info.name}"
-            temp_func = self.model.func.create(temp_func_name, "Analytic")
-            temp_func.set("expr", "T")
-            
-            # 创建热导率函数
-            k_func_name = f"k_{material_info.name}"
-            k_func = self._create_conductivity_function(material_info, k_func_name)
-            
-            # 创建密度函数
-            rho_func_name = f"rho_{material_info.name}"
-            rho_func = self._create_density_function(material_info, rho_func_name)
-            
-            # 创建比热容函数
-            cp_func_name = f"cp_{material_info.name}"
-            cp_func = self._create_heat_capacity_function(material_info, cp_func_name)
-            
-            # 设置材料属性
-            material.prop("thermal_conductivity").set("k", k_func)
-            material.prop("density").set("rho", rho_func)
-            material.prop("heat_capacity").set("cp", cp_func)
-            
-            logger.debug(f"Setup temperature dependent material: {material_info.name}")
-            
+            # 用户要求：暂不处理温度依赖，取第一个温度点作为常数属性
+            if not getattr(material_info, 'temperature_map', None):
+                # 若无温度点，则回退到默认常数流程
+                logger.debug(f"No temperature map for {material_info.name}, fallback to default constant setup")
+                return self._setup_constant_material(material, material_info)
+
+            # 选取最小温度对应的点
+            try:
+                first_temp = sorted(material_info.temperature_map.keys())[0]
+            except Exception:
+                first_temp = list(material_info.temperature_map.keys())[0]
+            point = material_info.temperature_map[first_temp]
+
+            conductivity = point.conductivity  # Conductivity 对象（含x,y,z/is_isotropic等）
+            density = point.density
+            heat_capacity = point.heat_capacity
+
+            # 设置材料属性 - 使用COMSOL热传导模块属性
+            if hasattr(conductivity, 'is_isotropic') and conductivity.is_isotropic():
+                (material/'Basic').property("thermalconductivity", getattr(conductivity, 'get_average', lambda: conductivity.x)())
+            else:
+                (material/'Basic').property(
+                    "thermalconductivity",
+                    [str(conductivity.x), '0', '0', '0', str(getattr(conductivity, 'y', conductivity.x)), '0', '0', '0', str(getattr(conductivity, 'z', conductivity.x))]
+                )
+                (material/'Basic').property("thermalconductivity_symmetry", '0')
+
+            (material/'Basic').property("density", density)
+            (material/'Basic').property("heatcapacity", heat_capacity)
+
+            logger.debug(f"Setup material as constant using first temperature point: {material_info.name} @ {first_temp}K")
+
         except Exception as e:
-            raise ComsolCreationError(f"Failed to setup temperature dependent material: {e}")
+            raise ComsolCreationError(f"Failed to setup temperature dependent material (use first point): {e}")
     
     def _setup_constant_material(self, material, material_info) -> None:
         """设置常数材料"""
@@ -1053,10 +1585,20 @@ class MPHConverter:
             density = material_info.get_density(default_temp)
             heat_capacity = material_info.get_heat_capacity(default_temp)
             
-            # 设置材料属性
-            material.prop("thermal_conductivity").set("k", conductivity)
-            material.prop("density").set("rho", density)
-            material.prop("heat_capacity").set("cp", heat_capacity)
+            # 设置材料属性 - 使用COMSOL热传导模块的正确属性名称
+            if conductivity.is_isotropic():
+                # 各向同性材料，使用热导率
+                (material/'Basic').property("thermalconductivity", conductivity.get_average())
+            else:
+                # 各向异性材料，使用张量形式
+                (material/'Basic').property("thermalconductivity", 
+                    [str(conductivity.x), '0', '0', 
+                     '0', str(conductivity.y), '0', 
+                     '0', '0', str(conductivity.z)])
+                (material/'Basic').property("thermalconductivity_symmetry", '0')
+            
+            (material/'Basic').property("density", density)
+            (material/'Basic').property("heatcapacity", heat_capacity)
             
             logger.debug(f"Setup constant material: {material_info.name}")
             
@@ -1064,39 +1606,33 @@ class MPHConverter:
             raise ComsolCreationError(f"Failed to setup constant material: {e}")
     
     def _setup_composite_material(self, material, composite_material) -> None:
-        """设置复合材料"""
+        """设置复合材料，使用优化后的CompositeMaterial类"""
         try:
-            # 获取复合材料组分
-            components = composite_material.get_components()
+            # 获取材料管理器
+            materials_mgr = self.thermal_info.get_materials_mgr()
             
-            # 创建混合材料属性
-            if components:
-                # 计算体积加权平均属性
-                total_volume = sum(comp.volume_fraction for comp in components)
-                
-                if total_volume > 0:
-                    # 热导率（体积加权平均）
-                    k_eff = sum(comp.material.get_conductivity(293.15) * comp.volume_fraction 
-                               for comp in components) / total_volume
-                    
-                    # 密度（体积加权平均）
-                    rho_eff = sum(comp.material.get_density(293.15) * comp.volume_fraction 
-                                 for comp in components) / total_volume
-                    
-                    # 比热容（体积加权平均）
-                    cp_eff = sum(comp.material.get_heat_capacity(293.15) * comp.volume_fraction 
-                                for comp in components) / total_volume
-                    
-                    # 设置有效属性
-                    material.prop("thermal_conductivity").set("k", k_eff)
-                    material.prop("density").set("rho", rho_eff)
-                    material.prop("heat_capacity").set("cp", cp_eff)
-                    
-                    logger.debug(f"Setup composite material: {composite_material.name}")
-                else:
-                    logger.warning(f"Composite material {composite_material.name} has zero total volume")
+            # 获取默认温度下的有效属性
+            default_temp = 293.15  # 20°C
+            
+            # 使用CompositeMaterial的方法计算有效属性
+            conductivity = composite_material.get_effective_conductivity(materials_mgr, default_temp)
+            density = composite_material.get_effective_density(materials_mgr, default_temp)
+            heat_capacity = composite_material.get_effective_heat_capacity(materials_mgr, default_temp)
+            
+            # 设置材料属性 - 使用COMSOL热传导模块的正确属性名称
+            if conductivity.is_isotropic():
+                # 各向同性材料，使用k_iso
+                material.property("k_iso", conductivity.get_average())
             else:
-                logger.warning(f"Composite material {composite_material.name} has no components")
+                # 各向异性材料，使用kii设置对角线元素
+                material.property("kii", conductivity.x)  # 主对角线元素
+                # 对于各向异性材料，可以设置kij=0（非对角线元素）
+            
+            material.property("rho", density)
+            material.property("cp", heat_capacity)
+            
+            logger.debug(f"Setup composite material: {composite_material.name}")
+            logger.debug(f"Effective properties - k: {conductivity}, rho: {density}, cp: {heat_capacity}")
                 
         except Exception as e:
             raise ComsolCreationError(f"Failed to setup composite material: {e}")
@@ -1118,11 +1654,11 @@ class MPHConverter:
                 if hasattr(object_material, 'modifications'):
                     for mod in object_material.modifications:
                         if mod.property == "thermal_conductivity":
-                            material.prop("thermal_conductivity").set("k", mod.value)
+                            material.property("thermal_conductivity", mod.value)
                         elif mod.property == "density":
-                            material.prop("density").set("rho", mod.value)
+                            material.property("density", mod.value)
                         elif mod.property == "heat_capacity":
-                            material.prop("heat_capacity").set("cp", mod.value)
+                            material.property("heat_capacity", mod.value)
                 
                 logger.debug(f"Setup object material: {object_material.name}")
             else:
@@ -1134,8 +1670,9 @@ class MPHConverter:
     def _create_conductivity_function(self, material_info, func_name: str):
         """创建热导率函数"""
         try:
-            # 创建插值函数
-            k_func = self.model.func.create(func_name, "Interpolation")
+            # 创建插值函数 - 使用正确的MPh API
+            functions = self.model/'functions'
+            k_func = functions.create('Interpolation', name=func_name)
             
             # 获取温度点和热导率值
             temperatures = []
@@ -1157,8 +1694,9 @@ class MPHConverter:
     def _create_density_function(self, material_info, func_name: str):
         """创建密度函数"""
         try:
-            # 创建插值函数
-            rho_func = self.model.func.create(func_name, "Interpolation")
+            # 创建插值函数 - 使用正确的MPh API
+            functions = self.model/'functions'
+            rho_func = functions.create('Interpolation', name=func_name)
             
             # 获取插值数据
             temperatures = []
@@ -1180,8 +1718,9 @@ class MPHConverter:
     def _create_heat_capacity_function(self, material_info, func_name: str):
         """创建比热容函数"""
         try:
-            # 创建插值函数
-            cp_func = self.model.func.create(func_name, "Interpolation")
+            # 创建插值函数 - 使用正确的MPh API
+            functions = self.model/'functions'
+            cp_func = functions.create('Interpolation', name=func_name)
             
             # 获取插值数据
             temperatures = []
@@ -1205,8 +1744,16 @@ class MPHConverter:
         logger.debug("Setting up heat transfer physics")
         
         try:
-            # 创建热传递物理场
-            heat_transfer = self.model.physics.create("heat", "HeatTransferInSolids")
+            # 创建热传递物理场 - 使用正确的MPh API
+            physics = self.model/'physics'
+            try:
+                # 创建热传导（固体）物理场，命名为 heat
+                heat_transfer = physics.create('HeatTransfer', self.geometry, name="heat")
+                logger.debug("Successfully created HeatTransfer physics")
+            except Exception as e:
+                logger.warning(f"Failed to create HeatTransfer physics: {e}")
+                logger.warning("Skipping heat transfer physics setup")
+                return
             
             # 设置热源
             self._setup_heat_sources(heat_transfer, thermal_info)
@@ -1222,29 +1769,132 @@ class MPHConverter:
     def _setup_heat_sources(self, heat_transfer, thermal_info: ThermalInfo) -> None:
         """设置热源"""
         try:
-            # 从parameters中获取功率信息
+            # 先处理基于参数的简单面热流（保留原逻辑）
             surface_heat_flux = thermal_info.parameters.get("surface_heat_flux", 0.0)
-            
             if surface_heat_flux > 0:
-                # 创建表面热源
-                surface_source = heat_transfer.feature().create("surf_heat", "HeatFlux")
-                surface_source.set("Q0", surface_heat_flux)
-                
-                # 选择所有外表面
-                surface_source.selection().set("assembly")
-            
-            # 从封装组件中获取功率映射
-            for section in thermal_info.get_all_sections():
-                if hasattr(section, 'power_type') and section.power_type:
-                    if section.power_type == "power_map":
-                        self._setup_power_map_source(section, heat_transfer)
-                    elif section.power_type == "total_power":
-                        self._setup_total_power_source(section, heat_transfer)
-            
+                surface_source = heat_transfer.create("HeatFlux", name="surf_heat")
+                # 使用 property 而不是 set
+                try:
+                    surface_source.property("Q0", surface_heat_flux)
+                except Exception:
+                    pass
+                # 设置选择为装配体（若不支持则忽略）
+                try:
+                    surface_source.property("selection", "assembly")
+                except Exception:
+                    try:
+                        surface_source.selection().property("selection", "assembly")
+                    except Exception:
+                        pass
+
+            # 遍历运行时区域：若是StackedDieSection（或含total_power）则在对应域添加总功率热源
+            for idx, section in enumerate(thermal_info.get_runtime_sections()):
+                total_power = getattr(section, 'total_power', 0.0)
+                if total_power and total_power > 0:
+                    # 获取该区域的几何选择名
+                    if hasattr(section, 'get_name'):
+                        base_name = section.get_name()
+                        geom_name = self._get_section_geom_name(idx, base_name)
+                    else:
+                        base_name = f"section_{idx}"
+                        geom_name = base_name
+
+                    # 为该区域创建（或更新）专用选择组（Union），后续由物理场引用
+                    power_sel_name = f"selpow_{geom_name}"
+                    try:
+                        self._create_union_selection(power_sel_name, [geom_name])
+                    except Exception:
+                        pass
+
+                    # 创建总功率热源（HeatRate）
+                    hs_name = f"hs_{geom_name}"
+                    hs_node = heat_transfer.create("HeatSource", name=hs_name)
+                    try:
+                        hs_node.property("heatSourceType", "HeatRate")
+                    except Exception as e:
+                        logger.warning(f"Failed to set heatSourceType for {hs_name}: {e}")
+                    try:
+                        hs_node.property("P0", total_power)
+                    except Exception as e:
+                        logger.warning(f"Failed to set P0 for {hs_name}: {e}")
+                    # 绑定到命名选择节点，避免"手动"
+                    try:
+                        selections = self.model/'selections'
+                        if power_sel_name in selections:
+                            sel_node = selections/power_sel_name
+                            logger.debug(f"Binding heat source {hs_name} to selection {power_sel_name}")
+                            hs_node.select(sel_node)
+                        else:
+                            logger.warning(f"Selection {power_sel_name} not found when binding heat source {hs_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to bind heat source {hs_name} to selection {power_sel_name}: {e}")
+
             logger.debug("Heat sources setup completed")
-            
         except Exception as e:
             logger.warning(f"Failed to setup heat sources: {e}")
+
+    def _create_union_selection(self, selection_name: str, input_selection_names: list) -> None:
+        """创建或更新一个Union类型的选择，其输入为已有的选择节点名称列表"""
+        try:
+            selections = self.model/'selections'
+            if selection_name in selections:
+                sel_node = selections/selection_name
+            else:
+                sel_node = selections.create('Union', name=selection_name)
+            input_tags = []
+            for name in input_selection_names:
+                if name in selections:
+                    try:
+                        input_tags.append((selections/name).tag())
+                    except Exception:
+                        pass
+            if not input_tags:
+                logger.debug(f"No valid inputs found for union selection {selection_name}")
+                return
+            try:
+                sel_node.java.selection('input').set(*input_tags)
+            except Exception:
+                try:
+                    sel_node.property('input', input_tags)
+                except Exception:
+                    logger.warning(f"Failed to set inputs for union selection {selection_name}")
+            try:
+                sel_node.property('entitydim', 3)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"Failed to create union selection {selection_name}: {e}")
+    
+    def _setup_directional_heat_flux(self, heat_transfer, thermal_info: ThermalInfo) -> None:
+        """设置方向性热流密度"""
+        try:
+            # 获取各个方向的热流密度参数
+            heat_flux_params = {
+                "air_heat_flux": thermal_info.parameters.get("air_heat_flux", 0.0),
+                "top_heat_flux": thermal_info.parameters.get("top_heat_flux", 0.0),
+                "side_heat_flux": thermal_info.parameters.get("side_heat_flux", 0.0),
+                "bottom_heat_flux": thermal_info.parameters.get("bottom_heat_flux", 0.0)
+            }
+            
+            # 为每个有热流密度的方向创建边界条件
+            for direction, heat_flux in heat_flux_params.items():
+                if heat_flux > 0:
+                    # 创建热流边界条件
+                    heat_flux_bc = heat_transfer.feature().create(f"heat_flux_{direction}", "HeatFlux")
+                    heat_flux_bc.set("Q0", heat_flux)
+                    heat_flux_bc.set("unit", "W/m^2")
+                    
+                    # 根据方向选择相应的表面
+                    # 这里需要根据实际的几何结构来设置选择
+                    # 暂时使用通用选择
+                    heat_flux_bc.selection().set("assembly")
+                    
+                    logger.debug(f"Set {direction}: {heat_flux} W/m^2")
+            
+            logger.debug("Directional heat flux setup completed")
+            
+        except Exception as e:
+            logger.warning(f"Failed to setup directional heat flux: {e}")
     
     def _setup_power_map_source(self, section, heat_transfer) -> None:
         """设置功率映射热源"""
@@ -1270,13 +1920,15 @@ class MPHConverter:
                 
                 # 设置功率映射函数（如果有）
                 if 'function' in power_map_info:
-                    power_func = self.model.func.create(f"power_map_{section.get_name()}", "Analytic")
+                    functions = self.model/'functions'
+                    power_func = functions.create('Analytic', name=f"power_map_{section.get_name()}")
                     power_func.set("expr", power_map_info['function'])
                     volume_source.set("Q", power_func)
                 
                 # 设置空间分布（如果有）
                 if 'spatial_distribution' in power_map_info:
-                    spatial_func = self.model.func.create(f"spatial_{section.get_name()}", "Analytic")
+                    functions = self.model/'functions'
+                    spatial_func = functions.create('Analytic', name=f"spatial_{section.get_name()}")
                     spatial_func.set("expr", power_map_info['spatial_distribution'])
                     volume_source.set("spatial", spatial_func)
             else:
@@ -1320,7 +1972,8 @@ class MPHConverter:
                 
                 # 设置功率分布函数（如果有）
                 if hasattr(section, 'power_distribution'):
-                    power_func = self.model.func.create(f"power_dist_{section.get_name()}", "Analytic")
+                    functions = self.model/'functions'
+                    power_func = functions.create('Analytic', name=f"power_dist_{section.get_name()}")
                     power_func.set("expr", section.power_distribution)
                     volume_source.set("Q", power_func)
             else:
@@ -1338,47 +1991,28 @@ class MPHConverter:
     def _setup_boundary_conditions(self, heat_transfer, thermal_info: ThermalInfo) -> None:
         """设置边界条件"""
         logger.debug("Setting up boundary conditions")
-        
         try:
-            # 获取热分析参数
-            thermal_para = thermal_info.thermal_parameters
-            
-            # 设置环境温度
-            ambient_temp = thermal_info.parameters.get("ambient_temperature", 293.15)
-            
-            # 创建温度边界条件
-            temp_bc = heat_transfer.feature().create("temp_bc", "Temperature")
-            temp_bc.set("T", ambient_temp)
-            
-            # 选择外表面
-            temp_bc.set("selection", "assembly")
-            
-            # 设置对流边界条件
-            if thermal_para and "heat_sink" in thermal_para:
-                heat_sink_para = thermal_para["heat_sink"]
-                if heat_sink_para.get("use_heat_sink", False):
-                    self._setup_convection_boundary(heat_transfer, heat_sink_para)
-            
-            # 设置辐射边界条件
-            if thermal_para and "radiation" in thermal_para:
-                radiation_para = thermal_para["radiation"]
-                if radiation_para.get("use_radiation", False):
-                    self._setup_radiation_boundary(heat_transfer, radiation_para)
-            
-            # 设置绝热边界条件
-            if thermal_para and "adiabatic" in thermal_para:
-                adiabatic_para = thermal_para["adiabatic"]
-                if adiabatic_para.get("use_adiabatic", False):
-                    self._setup_adiabatic_boundary(heat_transfer, adiabatic_para)
-            
-            # 设置热流边界条件
-            if thermal_para and "heat_flux" in thermal_para:
-                heat_flux_para = thermal_para["heat_flux"]
-                if heat_flux_para.get("use_heat_flux", False):
-                    self._setup_heat_flux_boundary(heat_transfer, heat_flux_para)
-            
+            # 环境温度
+            ambient_temp = 293.15
+
+            # 使用对流热通量边界（参考示例）：创建HeatFluxBoundary并设置为ConvectiveHeatFlux
+            conv_bc = heat_transfer.create("HeatFluxBoundary", name="hf_all")
+            try:
+                conv_bc.property("HeatFluxType", "ConvectiveHeatFlux")
+            except Exception:
+                pass
+            try:
+                conv_bc.property("h", 30)
+            except Exception:
+                pass
+            try:
+                conv_bc.property("Tinf", ambient_temp)
+            except Exception:
+                pass
+            # 不强制设置选择，保留COMSOL默认（所有边界）
+            logger.debug("Convective boundary: keep default selection (All boundaries)")
+
             logger.debug("Boundary conditions setup completed")
-            
         except Exception as e:
             logger.warning(f"Failed to setup boundary conditions: {e}")
     
@@ -1457,7 +2091,8 @@ class MPHConverter:
             
             # 设置热流函数（如果有）
             if "heat_flux_function" in heat_flux_para:
-                flux_func = self.model.func.create("heat_flux_func", "Analytic")
+                functions = self.model/'functions'
+                flux_func = functions.create('Analytic', name="heat_flux_func")
                 flux_func.set("expr", heat_flux_para["heat_flux_function"])
                 flux_bc.set("Q0", flux_func)
             
@@ -1475,7 +2110,8 @@ class MPHConverter:
         
         try:
             # 创建网格
-            mesh = self.model.mesh.create("mesh", "assembly")
+            meshes = self.model/'meshes'
+            mesh = meshes.create(self.geometry, name="mesh")
             
             # 获取网格参数
             mesh_params = thermal_info.parameters.get("mesh_parameters", {})
@@ -1508,10 +2144,10 @@ class MPHConverter:
                 quality = mesh_params["quality"]
                 mesh.set("quality", quality.get("target_quality", 0.3))
             
-            # 生成网格
-            mesh.run()
+            # 生成网格 - 暂时注释掉，手动执行网格生成
+            # mesh.run()
             
-            logger.debug("Mesh generation completed")
+            logger.debug("Mesh setup completed (manual mesh generation required)")
             
         except Exception as e:
             logger.warning(f"Failed to generate mesh: {e}")
@@ -1544,42 +2180,13 @@ class MPHConverter:
         logger.debug("Setting up solver")
         
         try:
-            # 创建求解器
-            solver = self.model.sol.create("sol1")
-            
-            # 获取求解器参数
-            solver_params = thermal_info.parameters.get("solver_parameters", {})
-            
-            # 设置求解器类型
-            solver_type = solver_params.get("solver_type", "stationary")
-            solver.set("solvertype", solver_type)
-            
-            # 设置求解方法
-            solver_method = solver_params.get("method", "direct")
-            solver.set("method", solver_method)
-            
-            # 设置求解参数
-            if solver_method == "direct":
-                solver.set("pivoting", solver_params.get("pivoting", "automatic"))
-                solver.set("scaling", solver_params.get("scaling", "automatic"))
-            elif solver_method == "iterative":
-                solver.set("precond", solver_params.get("preconditioner", "ilu"))
-                solver.set("maxiter", solver_params.get("max_iterations", 1000))
-                solver.set("tol", solver_params.get("tolerance", 1e-6))
-            
-            # 设置输出控制
-            if "output" in solver_params:
-                output = solver_params["output"]
-                solver.set("out", output.get("output_level", "normal"))
-                solver.set("plot", output.get("plot_during_solve", True))
-            
-            # 运行求解器
-            solver.run()
-            
-            logger.debug("Solver setup completed")
+            # 仅运行稳态研究，不做回退 - 暂时注释掉，手动执行求解
+            # self.model.solve('static')
+            logger.debug("Solver setup completed (manual solve required)")
             
         except Exception as e:
-            logger.warning(f"Failed to setup solver: {e}")
+            # 不回退，直接抛出
+            raise ComsolCreationError(f"Failed to setup solver: {e}")
     
     def _save_file(self, output_file: Path) -> None:
         """保存文件"""
@@ -1605,7 +2212,7 @@ class MPHConverter:
         
         summary = {
             "model_name": self.thermal_info.name,
-            "total_sections": len(self.thermal_info.get_all_sections()),
+            "total_sections": len(self.thermal_info.get_runtime_sections()),
             "total_materials": len(self.thermal_info.get_materials_mgr().get_materials()),
             "conversion_status": "completed",
             "output_format": "COMSOL MPH"
@@ -1633,19 +2240,70 @@ class MPHConverter:
         
         try:
             # 统计几何对象
-            if self.model and hasattr(self.model, 'geom'):
-                stats["geometry_objects"] = len(self.model.geom.feature().list())
+            if self.model and hasattr(self.model, 'geometries'):
+                geometries = self.model.geometries()
+                if geometries:
+                    stats["geometry_objects"] = len(geometries)
+                else:
+                    stats["geometry_objects"] = 0
             
             # 统计材料
-            if self.model and hasattr(self.model, 'material'):
-                stats["materials_created"] = len(self.model.material.list())
+            if self.model:
+                materials = self.model/'materials'
+                stats["materials_created"] = len(materials.children())
             
             # 统计物理场
-            if self.model and hasattr(self.model, 'physics'):
-                stats["physics_fields"] = len(self.model.physics.list())
+            if self.model:
+                physics = self.model/'physics'
+                stats["physics_fields"] = len(physics.children())
             
         except Exception:
             pass
         
         return stats
+    
+    def _setup_steady_heat_study(self) -> None:
+        """设置稳态热单场研究（Stationary）并关联heat物理场"""
+        try:
+            studies = self.model/'studies'
+            # 创建或获取研究
+            if 'static' in self.model.studies():
+                study = studies/'static'
+            else:
+                study = studies.create(name='static')
+            
+            # 创建或获取稳态步骤
+            if 'stationary' in study:
+                step = study/'stationary'
+            else:
+                step = study.create('Stationary', name='stationary')
+            
+            # 激活heat物理场
+            physics = self.model/'physics'
+            try:
+                step.property('activate', [physics/'heat', 'on', 'frame:spatial1', 'on', 'frame:material1', 'on'])
+            except Exception:
+                # 兼容不同版本的激活格式
+                pass
+            
+            logger.debug("Steady-state heat study setup completed")
+        except Exception as e:
+            logger.warning(f"Failed to setup steady-state study: {e}")
+
+    def _ensure_all_boundary_selection(self):
+        """确保存在一个选择所有边界的命名选择，返回该选择节点"""
+        try:
+            selections = self.model/'selections'
+            sel_name = 'sel_all_boundaries'
+            if sel_name in selections:
+                return selections/sel_name
+            node = selections.create('All', name=sel_name)
+            try:
+                node.property('entitydim', 2)
+            except Exception:
+                pass
+            return node
+        except Exception as e:
+            logger.warning(f"Failed to ensure all-boundaries selection: {e}")
+            return None
 

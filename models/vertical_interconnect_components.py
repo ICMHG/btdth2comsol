@@ -32,10 +32,10 @@ class VerticalInterconnectShape:
             self.from_json(json_data)
     
     def from_json(self, json_data: Dict[str, Any]) -> None:
-        """从JSON数据加载"""
+        """从JSON数据加载，支持BTD格式"""
         try:
             self.name = json_data.get("name", "")
-            self.shape_type = json_data.get("shapeType", "")
+            self.shape_type = json_data.get("shape_type", json_data.get("shapeType", ""))
             
             logger.debug(f"Loaded VerticalInterconnectShape: {self.name}")
             
@@ -85,7 +85,7 @@ class BallBumpShape(VerticalInterconnectShape):
         return self.height
     
     def from_json(self, json_data: Dict[str, Any]) -> None:
-        """从JSON数据加载"""
+        """从JSON数据加载，支持BTD格式"""
         try:
             super().from_json(json_data)
             
@@ -144,19 +144,30 @@ class VerticalInterconnectInfo:
         return self.shape
     
     def from_json(self, json_data: Dict[str, Any]) -> None:
-        """从JSON数据加载"""
+        """从JSON数据加载，支持BTD格式"""
         try:
             self.name = json_data.get("name", "")
             
-            # 设置组件类型
-            type_str = json_data.get("componentType", "PadStack")
-            if type_str == "BallBump":
+            # 设置组件类型，支持BTD格式的字段名
+            type_str = json_data.get("type", json_data.get("componentType", "padstack"))
+            if type_str == "ballbump" or type_str == "BallBump":
                 self.component_type = ComponentType.BALL_BUMP
             else:
                 self.component_type = ComponentType.PAD_STACK
             
-            # 加载形状
-            if "shape" in json_data:
+            # 加载形状，支持BTD格式的shapes数组
+            if "shapes" in json_data:
+                # BTD格式：shapes是一个数组
+                shapes_data = json_data["shapes"]
+                if isinstance(shapes_data, list) and shapes_data:
+                    # 取第一个shape
+                    shape_data = shapes_data[0]
+                    if self.component_type == ComponentType.BALL_BUMP:
+                        self.shape = BallBumpShape(shape_data)
+                    else:
+                        self.shape = VerticalInterconnectShape(shape_data)
+            elif "shape" in json_data:
+                # 标准格式：单个shape对象
                 shape_data = json_data["shape"]
                 if self.component_type == ComponentType.BALL_BUMP:
                     self.shape = BallBumpShape(shape_data)
@@ -216,12 +227,12 @@ class BallBumpInfo(VerticalInterconnectInfo):
         return self.thermal_conductivity
     
     def from_json(self, json_data: Dict[str, Any]) -> None:
-        """从JSON数据加载"""
+        """从JSON数据加载，支持BTD格式"""
         try:
             super().from_json(json_data)
             
             self.material = json_data.get("material", "")
-            self.thermal_conductivity = json_data.get("thermalConductivity", 0.0)
+            self.thermal_conductivity = json_data.get("thermal_conductivity", json_data.get("thermalConductivity", 0.0))
             
             logger.debug(f"Loaded BallBumpInfo: {self.name}")
             

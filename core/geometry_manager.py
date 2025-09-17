@@ -189,7 +189,11 @@ class GeometryManager:
             if section.children:
                 for child in section.children:
                     if not child.material:
-                        logger.warning(f"Child component {child.name} has no material")
+                        # 检查是否是template引用的组件（这些组件材料信息在template中定义）
+                        if hasattr(child, 'template_name') and child.template_name:
+                            logger.debug(f"Child component {child.name} is template-based, material info in template")
+                        else:
+                            logger.warning(f"Child component2 {child.name} has no material")
         
         logger.info("Geometry integrity validation passed")
         return True

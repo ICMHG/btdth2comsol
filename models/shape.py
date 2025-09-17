@@ -282,8 +282,6 @@ class Cube(Shape):
             height: 高度（Z方向）
         """
         super().__init__(ShapeType.CUBE, position)
-        if length <= 0 or width <= 0 or height <= 0:
-            raise ValueError("Length, width and height must be positive")
         self.length = float(length)
         self.width = float(width)
         self.height = float(height)
@@ -294,8 +292,6 @@ class Cube(Shape):
     
     def set_length(self, length: float) -> None:
         """设置长度"""
-        if length <= 0:
-            raise ValueError("Length must be positive")
         self.length = float(length)
         self.is_modified = True
     
@@ -305,8 +301,6 @@ class Cube(Shape):
     
     def set_width(self, width: float) -> None:
         """设置宽度"""
-        if width <= 0:
-            raise ValueError("Width must be positive")
         self.width = float(width)
         self.is_modified = True
     
@@ -316,8 +310,6 @@ class Cube(Shape):
     
     def set_height(self, height: float) -> None:
         """设置高度"""
-        if height <= 0:
-            raise ValueError("Height must be positive")
         self.height = float(height)
         self.is_modified = True
     

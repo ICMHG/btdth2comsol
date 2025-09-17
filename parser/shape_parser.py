@@ -76,16 +76,8 @@ class ShapeParser:
             x, y, z = float(match.group(1)), float(match.group(2)), float(match.group(3))
             length, width, height = float(match.group(4)), float(match.group(5)), float(match.group(6))
             
-            # 处理0值的情况，将其替换为小的正数
-            if length <= 0:
-                length = 0.001  # 1微米
-                logger.warning(f"Invalid cube length {match.group(4)}, using {length}")
-            if width <= 0:
-                width = 0.001   # 1微米
-                logger.warning(f"Invalid cube width {match.group(5)}, using {width}")
-            if height <= 0:
-                height = 0.001  # 1微米
-                logger.warning(f"Invalid cube height {match.group(6)}, using {height}")
+            # 注意：btdth文件中的长度单位是nm，现在COMSOL模型已设置为nm单位，无需转换
+            # 直接使用nm单位，不进行转换
             
             position = Vector3D(x, y, z)
             return Cube(position, length, width, height)
@@ -96,8 +88,9 @@ class ShapeParser:
         if match:
             x, y, z = float(match.group(1)), float(match.group(2)), float(match.group(3))
             radius, height = float(match.group(4)), float(match.group(5))
+            # 直接使用nm单位，不进行转换
             position = Vector3D(x, y, z)
-            return Cylinder(position, radius, height)
+            return Cylinder(radius, height, position)
         
         # 六棱柱: hexagonal_prism([x,y,z], radius, height)
         hex_pattern = r"hexagonal_prism\(\[([^,]+),([^,]+),([^,]+)\],([^,]+),([^,]+)\)"
@@ -105,6 +98,7 @@ class ShapeParser:
         if match:
             x, y, z = float(match.group(1)), float(match.group(2)), float(match.group(3))
             radius, height = float(match.group(4)), float(match.group(5))
+            # 直接使用nm单位，不进行转换
             position = Vector3D(x, y, z)
             return HexagonalPrism(position, radius, height)
         
