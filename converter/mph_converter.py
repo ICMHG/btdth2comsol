@@ -1995,23 +1995,33 @@ class MPHConverter:
             # 环境温度
             ambient_temp = 293.15
 
-            # 使用对流热通量边界（参考示例）：创建HeatFluxBoundary并设置为ConvectiveHeatFlux
-            conv_bc = heat_transfer.create("HeatFluxBoundary", name="hf_all")
+            # 参考用户代码：使用Java API在ht物理场下创建hf1并选择所有边界
+            j = self.model.java
+            # 创建 feature
             try:
-                conv_bc.property("HeatFluxType", "ConvectiveHeatFlux")
+                j.component('comp1').physics('ht').create('hf1', 'HeatFluxBoundary', 2)
+            except Exception:
+                # 如果已存在则忽略
+                pass
+            # 配置参数
+            try:
+                j.component('comp1').physics('ht').feature('hf1').set('HeatFluxType', 'ConvectiveHeatFlux')
             except Exception:
                 pass
             try:
-                conv_bc.property("h", 30)
+                j.component('comp1').physics('ht').feature('hf1').set('h', '30')
             except Exception:
                 pass
             try:
-                conv_bc.property("Tinf", ambient_temp)
+                j.component('comp1').physics('ht').feature('hf1').set('Tinf', str(ambient_temp))
             except Exception:
                 pass
-            # 不强制设置选择，保留COMSOL默认（所有边界）
-            logger.debug("Convective boundary: keep default selection (All boundaries)")
-
+            # 选择全部边界
+            try:
+                j.component('comp1').physics('ht').feature('hf1').selection().all()
+            except Exception:
+                logger.warning("Failed to set selection().all() for hf1")
+ 
             logger.debug("Boundary conditions setup completed")
         except Exception as e:
             logger.warning(f"Failed to setup boundary conditions: {e}")
